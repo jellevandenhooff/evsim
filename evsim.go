@@ -2,10 +2,8 @@ package evsim
 
 import (
 	"container/heap"
-	"iter"
 	"log"
 	"math/rand"
-	"runtime"
 	"time"
 )
 
@@ -31,14 +29,30 @@ func (t timers) Swap(i, j int) {
 }
 
 func (t *timers) Push(x any) {
+	panic("no")
 	*t = append(*t, x.(timer))
 }
 
+func (t *timers) push(x timer) {
+	*t = append(*t, x)
+	heap.Fix(t, len(*t)-1)
+}
+
 func (t *timers) Pop() any {
+	panic("no")
 	n := len(*t)
 	last := (*t)[n-1]
 	*t = (*t)[:n-1]
 	return last
+}
+
+func (t *timers) pop() timer {
+	x := (*t)[0]
+	n := len(*t)
+	(*t)[0] = (*t)[n-1]
+	*t = (*t)[:n-1]
+	heap.Fix(t, 0)
+	return x
 }
 
 type Simulation struct {
@@ -67,28 +81,14 @@ type Process struct {
 
 	fn func(p *Process)
 
-	iterYieldFn func(struct{}) bool
-	iterNextFn  func() (struct{}, bool)
-	iterStopFn  func()
-}
-
-func (p *Process) run(yield func(struct{}) bool) {
-	p.iterYieldFn = yield
-	defer func() {
-		if p := recover(); p != nil {
-			if p != stopValue {
-				var buf [4096]byte
-				n := runtime.Stack(buf[:], false)
-				log.Fatalf("unexpected panic\n%s\n%s", p, string(buf[:n]))
-			}
-		}
-	}()
-	p.fn(p)
+	c *coroutine
 }
 
 func (p *Process) step() {
-	_, ok := p.iterNextFn()
+	ok := p.c.step()
 	if !ok {
+		freeCoroutine(p.c)
+		p.c = nil
 		p.simulation.removeRunnable(p)
 	}
 }
@@ -97,9 +97,10 @@ func (p *Process) yield() {
 	if p.simulation.current != p {
 		panic("help")
 	}
-	if !p.iterYieldFn(struct{}{}) {
-		panic(stopValue)
-	}
+	p.c.yield()
+	// if !p. iterYieldFn(struct{}{}) {
+	// panic(stopValue)
+	// }
 }
 
 func (p *Process) Simulation() *Simulation {
@@ -121,7 +122,7 @@ func (s *Simulation) addTimer(at time.Time, thenUnpause *Process) {
 		panic("bad time")
 	}
 
-	heap.Push(&s.timers, timer{
+	s.timers.push(timer{
 		at:          at,
 		thenUnpause: thenUnpause,
 	})
@@ -131,46 +132,62 @@ func (s *Simulation) addRunnable(p *Process) {
 	if p.runnableIdx != -1 {
 		panic("already runnable")
 	}
+	// log.Printf("adding runnable... %p", p)
 	p.runnableIdx = len(s.runnable)
 	s.runnable = append(s.runnable, p)
+	s.check()
+}
+
+func (s *Simulation) check() {
+	for i := 0; i < len(s.runnable); i++ {
+		if s.runnable[i].runnableIdx != i {
+			log.Fatalf("%d bad: %d", i, s.runnable[i].runnableIdx)
+		}
+	}
 }
 
 func (s *Simulation) removeRunnable(p *Process) {
 	if p.runnableIdx == -1 {
 		panic("already stopped")
 	}
+	if s.runnable[p.runnableIdx] != p {
+		panic("uh oh")
+	}
+	// s.check()
 	a := p.runnableIdx
 	b := len(s.runnable) - 1
 	s.runnable[a] = s.runnable[b]
 	s.runnable[a].runnableIdx = a
 	s.runnable = s.runnable[:b]
 	p.runnableIdx = -1
+	// s.check()
 }
 
 func (s *Simulation) run() {
 	for !s.stopped {
 		if len(s.runnable) == 0 {
 			if len(s.timers) > 0 {
-				next := heap.Pop(&s.timers).(timer)
+				next := s.timers.pop()
 				if !next.at.After(s.now) {
 					panic("huh")
 				}
 				if next.at.After(s.now) {
-					log.Printf("advancing time to %s", s.now.Format(time.TimeOnly))
+					// log.Printf("advancing time to %s", s.now.Format(time.TimeOnly))
 					s.now = next.at
 				}
 				s.addRunnable(next.thenUnpause)
 				for len(s.timers) > 0 && s.timers[0].at.Equal(s.now) {
 					s.addRunnable(s.timers[0].thenUnpause)
-					heap.Pop(&s.timers)
+					s.timers.pop()
 				}
 				continue
 			}
-			log.Printf("nothing runnable anymore; stopping")
+			// log.Printf("nothing runnable anymore; stopping")
 			break
 		}
 
 		idx := rand.Intn(len(s.runnable))
+		// log.Printf("selecting runnable")
 		p := s.runnable[idx]
 		s.current = p
 		p.step()
@@ -184,9 +201,10 @@ func (s *Simulation) Spawn(f func(p *Process)) {
 		runnableIdx: -1,
 		simulation:  s,
 	}
-	next, stop := iter.Pull(p.run)
-	p.iterNextFn = next
-	p.iterStopFn = stop
+	p.c = allocCoroutine()
+	p.c.run(func() {
+		f(p)
+	})
 	s.addRunnable(p)
 }
 
@@ -207,8 +225,7 @@ type Semaphore struct {
 
 	available int
 
-	waitingOrig []*Process
-	waiting     []*Process
+	waitingFirst, waitingLast *Process
 }
 
 func NewSemaphore(s *Simulation, limit int) *Semaphore {
@@ -225,16 +242,27 @@ func (r *Semaphore) Acquire(p *Process) {
 	}
 
 	r.simulation.removeRunnable(p)
-	r.waiting = append(r.waiting, p)
+	p.waitingPrev = r.waitingLast
+	if r.waitingLast != nil {
+		r.waitingLast.waitingNext = p
+	} else {
+		r.waitingFirst = p
+	}
+	r.waitingLast = p
 	p.yield()
 }
 
 func (r *Semaphore) Release(p *Process) {
-	if len(r.waiting) > 0 {
-		// ugh...
-		p := r.waiting[0]
+	if r.waitingFirst != nil {
+		p := r.waitingFirst
+		r.waitingFirst = p.waitingNext
+		p.waitingNext = nil
+		if r.waitingFirst != nil {
+			r.waitingFirst.waitingPrev = nil
+		} else {
+			r.waitingLast = nil
+		}
 		r.simulation.addRunnable(p)
-		r.waiting = r.waiting[1:]
 	} else {
 		r.available += 1
 	}
