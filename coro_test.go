@@ -6,20 +6,17 @@ import (
 )
 
 func TestCoro(t *testing.T) {
+	c := newCoro[struct{}]()
 	for run := 0; run < 10; run++ {
-		c := allocCoroutine()
-
-		c.run(func() {
+		c.run(func(struct{}) {
 			log.Print(run)
 			for i := 0; i < run; i++ {
 				log.Print(i)
 				c.yield()
 			}
-		})
+		}, struct{}{})
 
 		for c.step() {
 		}
-
-		freeCoroutine(c)
 	}
 }

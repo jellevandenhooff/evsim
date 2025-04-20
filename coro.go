@@ -4,25 +4,26 @@ import (
 	"iter"
 	"log"
 	"runtime"
-	"sync"
 )
 
-type coroutine struct {
-	f       func()
+type coroutine[T any] struct {
+	f   func(T)
+	arg T
+
 	yieldFn func(bool) bool
 	nextFn  func() (bool, bool)
 	stopFn  func()
 }
 
-func newCoro() *coroutine {
-	c := &coroutine{}
+func newCoro[T any]() *coroutine[T] {
+	c := &coroutine[T]{}
 	next, stop := iter.Pull(c.entrypoint)
 	c.nextFn = next
 	c.stopFn = stop
 	return c
 }
 
-func (c *coroutine) entrypoint(yield func(bool) bool) {
+func (c *coroutine[T]) entrypoint(yield func(bool) bool) {
 	c.yieldFn = yield
 	for {
 		func() {
@@ -35,46 +36,22 @@ func (c *coroutine) entrypoint(yield func(bool) bool) {
 					}
 				}
 			}()
-			c.f()
+			c.f(c.arg)
 		}()
 		c.yieldFn(false)
 	}
 }
 
-func (c *coroutine) run(f func()) {
+func (c *coroutine[T]) run(f func(T), arg T) {
 	c.f = f
+	c.arg = arg
 }
 
-func (c *coroutine) step() bool {
+func (c *coroutine[T]) step() bool {
 	more, _ := c.nextFn()
 	return more
 }
 
-func (c *coroutine) yield() {
+func (c *coroutine[T]) yield() {
 	c.yieldFn(true)
-}
-
-var (
-	freeCoroutinesMu sync.Mutex
-	freeCoroutines   []*coroutine
-)
-
-func allocCoroutine() *coroutine {
-	freeCoroutinesMu.Lock()
-	defer freeCoroutinesMu.Unlock()
-
-	n := len(freeCoroutines)
-	if n > 0 {
-		c := freeCoroutines[n-1]
-		freeCoroutines = freeCoroutines[:n-1]
-		return c
-	}
-	return newCoro()
-}
-
-func freeCoroutine(c *coroutine) {
-	freeCoroutinesMu.Lock()
-	defer freeCoroutinesMu.Unlock()
-
-	freeCoroutines = append(freeCoroutines, c)
 }

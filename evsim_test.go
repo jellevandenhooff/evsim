@@ -82,7 +82,9 @@ func runParallel(n int, f func()) {
 
 func BenchmarkEvsim(b *testing.B) {
 	runParallel(b.N, func() {
-		sim := evsim.NewSimulation()
+		sim := evsim.SimulationsPool.Get()
+		defer evsim.SimulationsPool.Put(sim)
+
 		sem := evsim.NewSemaphore(sim, 10)
 
 		for j := 0; j < 1000; j++ {
@@ -98,8 +100,3 @@ func BenchmarkEvsim(b *testing.B) {
 		sim.Start()
 	})
 }
-
-// before: BenchmarkEvsim-10            633           1802171 ns/op         1317468 B/op      34047 allocs/op
-// after timers: BenchmarkEvsim-10           1383            751415 ns/op          677227 B/op      14046 allocs/op
-// after alloc: BenchmarkEvsim-10           1732            686324 ns/op          450715 B/op      14018 allocs/op
-// after pool: BenchmarkEvsim-10           1479            771514 ns/op          109718 B/op       3019 allocs/op

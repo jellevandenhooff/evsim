@@ -30,7 +30,6 @@ func (t timers) Swap(i, j int) {
 
 func (t *timers) Push(x any) {
 	panic("no")
-	*t = append(*t, x.(timer))
 }
 
 func (t *timers) push(x timer) {
@@ -40,10 +39,6 @@ func (t *timers) push(x timer) {
 
 func (t *timers) Pop() any {
 	panic("no")
-	n := len(*t)
-	last := (*t)[n-1]
-	*t = (*t)[:n-1]
-	return last
 }
 
 func (t *timers) pop() timer {
@@ -64,11 +59,30 @@ type Simulation struct {
 
 	timers   timers
 	runnable []*Process
+
+	processPool Pool[*Process]
+}
+
+var SimulationsPool = SyncPool[*Simulation]{
+	new:   NewSimulation,
+	reset: (*Simulation).reset,
+}
+
+func (s *Simulation) reset() {
+	s.stopped = false
+	s.now = time.Date(2020, 1, 1, 10, 15, 10, 0, time.UTC)
+	s.current = nil
+	s.timers = s.timers[:0]
+	s.runnable = s.runnable[:0]
 }
 
 func NewSimulation() *Simulation {
 	return &Simulation{
 		now: time.Date(2020, 1, 1, 10, 15, 10, 0, time.UTC),
+		processPool: Pool[*Process]{
+			new:   newProcess,
+			reset: (*Process).reset,
+		},
 	}
 }
 
@@ -81,15 +95,30 @@ type Process struct {
 
 	fn func(p *Process)
 
-	c *coroutine
+	coroutine *coroutine[*Process]
+}
+
+func newProcess() *Process {
+	p := &Process{
+		coroutine: newCoro[*Process](),
+	}
+	p.reset()
+	return p
+}
+
+func (p *Process) reset() {
+	p.simulation = nil
+	p.runnableIdx = -1
+	p.waitingPrev = nil
+	p.waitingNext = nil
+	p.fn = nil
 }
 
 func (p *Process) step() {
-	ok := p.c.step()
+	ok := p.coroutine.step()
 	if !ok {
-		freeCoroutine(p.c)
-		p.c = nil
 		p.simulation.removeRunnable(p)
+		p.simulation.processPool.Put(p)
 	}
 }
 
@@ -97,10 +126,7 @@ func (p *Process) yield() {
 	if p.simulation.current != p {
 		panic("help")
 	}
-	p.c.yield()
-	// if !p. iterYieldFn(struct{}{}) {
-	// panic(stopValue)
-	// }
+	p.coroutine.yield()
 }
 
 func (p *Process) Simulation() *Simulation {
@@ -187,7 +213,6 @@ func (s *Simulation) run() {
 		}
 
 		idx := rand.Intn(len(s.runnable))
-		// log.Printf("selecting runnable")
 		p := s.runnable[idx]
 		s.current = p
 		p.step()
@@ -196,15 +221,10 @@ func (s *Simulation) run() {
 }
 
 func (s *Simulation) Spawn(f func(p *Process)) {
-	p := &Process{
-		fn:          f,
-		runnableIdx: -1,
-		simulation:  s,
-	}
-	p.c = allocCoroutine()
-	p.c.run(func() {
-		f(p)
-	})
+	p := s.processPool.Get()
+	p.simulation = s
+	p.fn = f
+	p.coroutine.run(f, p)
 	s.addRunnable(p)
 }
 
