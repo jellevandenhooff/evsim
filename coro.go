@@ -7,8 +7,9 @@ import (
 )
 
 type coroutine[T any] struct {
-	f   func(T)
-	arg T
+	abort bool
+	f     func(T)
+	arg   T
 
 	yieldFn func(bool) bool
 	nextFn  func() (bool, bool)
@@ -55,6 +56,23 @@ func (c *coroutine[T]) step() bool {
 	return more
 }
 
+func (c *coroutine[T]) stop() {
+	if c.f != nil {
+		var emptyT T
+		c.f, c.arg = nil, emptyT
+	} else {
+		c.abort = true
+		more, _ := c.nextFn()
+		if more != false {
+			panic("did not abort")
+		}
+		c.abort = false
+	}
+}
+
 func (c *coroutine[T]) yield() {
 	c.yieldFn(true)
+	if c.abort {
+		panic(stopValue)
+	}
 }
