@@ -2,6 +2,7 @@ package evsim_test
 
 import (
 	"log"
+	"reflect"
 	"runtime"
 	"sync"
 	"testing"
@@ -105,16 +106,23 @@ func TestChannelNoBlock(t *testing.T) {
 
 	ch := evsim.NewChannel[int](1)
 
+	var read []int
+
 	sim.Spawn(func(p *evsim.Process) {
 		ch.Write(p, 1)
 	})
 
 	sim.Spawn(func(p *evsim.Process) {
 		p.Sleep(1)
-		log.Println(ch.Read(p))
+		read = append(read, ch.Read(p))
 	})
 
 	sim.Start()
+
+	log.Println(read)
+	if !reflect.DeepEqual(read, []int{1}) {
+		t.Error(read)
+	}
 }
 
 func TestChannelBlockWrite(t *testing.T) {
@@ -122,6 +130,8 @@ func TestChannelBlockWrite(t *testing.T) {
 
 	ch := evsim.NewChannel[int](1)
 
+	var read []int
+
 	sim.Spawn(func(p *evsim.Process) {
 		ch.Write(p, 1)
 		ch.Write(p, 2)
@@ -129,11 +139,16 @@ func TestChannelBlockWrite(t *testing.T) {
 
 	sim.Spawn(func(p *evsim.Process) {
 		p.Sleep(1)
-		log.Println(ch.Read(p))
-		log.Println(ch.Read(p))
+		read = append(read, ch.Read(p))
+		read = append(read, ch.Read(p))
 	})
 
 	sim.Start()
+
+	log.Println(read)
+	if !reflect.DeepEqual(read, []int{1, 2}) {
+		t.Error(read)
+	}
 }
 
 func TestChannelBlockRead(t *testing.T) {
@@ -141,6 +156,8 @@ func TestChannelBlockRead(t *testing.T) {
 
 	ch := evsim.NewChannel[int](1)
 
+	var read []int
+
 	sim.Spawn(func(p *evsim.Process) {
 		p.Sleep(1)
 		ch.Write(p, 1)
@@ -148,9 +165,14 @@ func TestChannelBlockRead(t *testing.T) {
 	})
 
 	sim.Spawn(func(p *evsim.Process) {
-		log.Println(ch.Read(p))
-		log.Println(ch.Read(p))
+		read = append(read, ch.Read(p))
+		read = append(read, ch.Read(p))
 	})
 
 	sim.Start()
+
+	log.Println(read)
+	if !reflect.DeepEqual(read, []int{1, 2}) {
+		t.Error(read)
+	}
 }
