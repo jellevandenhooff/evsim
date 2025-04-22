@@ -2,7 +2,6 @@ package evsim
 
 import (
 	"container/heap"
-	"log"
 	"math/rand"
 )
 
@@ -58,6 +57,7 @@ type Simulation struct {
 
 	timers   timers
 	runnable []*Process
+	all      []*Process
 
 	processPool Pool[*Process]
 }
@@ -85,14 +85,46 @@ func NewSimulation() *Simulation {
 	}
 }
 
+func intrusiveAppend[T any](list *[]T, idx func(elem T) *int, elem T) {
+	n := len(*list)
+	*list = append(*list, elem)
+	i := *idx(elem)
+	if i != -1 {
+		panic("bad index")
+	}
+	*idx(elem) = n
+}
+
+func intrusiveRemove[T any](list *[]T, idx func(elem T) *int, elem T) {
+	a := *idx(elem)
+	if a == -1 {
+		panic("bad index")
+	}
+	b := len(*list) - 1
+	if a != b {
+		other := (*list)[b]
+		(*list)[a] = other
+		*idx(other) = a
+	}
+	*list = (*list)[:b]
+	*idx(elem) = -1
+}
+
 type Process struct {
 	simulation               *Simulation
-	runnableIdx              int
+	allIdx, runnableIdx      int
 	waitingPrev, waitingNext *Process
-	fn                       func(p *Process)
 	coroutine                *coroutine[*Process]
 
 	pendingItem any
+}
+
+func (p *Process) runnableIdxPtr() *int {
+	return &p.runnableIdx
+}
+
+func (p *Process) allIdxPtr() *int {
+	return &p.allIdx
 }
 
 func newProcess() *Process {
@@ -105,15 +137,16 @@ func newProcess() *Process {
 
 func (p *Process) reset() {
 	p.simulation = nil
+	p.allIdx = -1
 	p.runnableIdx = -1
 	p.waitingPrev = nil
 	p.waitingNext = nil
-	p.fn = nil
 }
 
 func (p *Process) step() {
 	ok := p.coroutine.step()
 	if !ok {
+		p.simulation.removeAll(p)
 		p.simulation.removeRunnable(p)
 		p.simulation.processPool.Put(p)
 	}
@@ -182,38 +215,19 @@ func (s *Simulation) addTimer(at float64, thenUnpause *Process) {
 }
 
 func (s *Simulation) addRunnable(p *Process) {
-	if p.runnableIdx != -1 {
-		panic("already runnable")
-	}
-	// log.Printf("adding runnable... %p", p)
-	p.runnableIdx = len(s.runnable)
-	s.runnable = append(s.runnable, p)
-	s.check()
-}
-
-func (s *Simulation) check() {
-	for i := range len(s.runnable) {
-		if s.runnable[i].runnableIdx != i {
-			log.Fatalf("%d bad: %d", i, s.runnable[i].runnableIdx)
-		}
-	}
+	intrusiveAppend(&s.runnable, (*Process).runnableIdxPtr, p)
 }
 
 func (s *Simulation) removeRunnable(p *Process) {
-	if p.runnableIdx == -1 {
-		panic("already stopped")
-	}
-	if s.runnable[p.runnableIdx] != p {
-		panic("uh oh")
-	}
-	// s.check()
-	a := p.runnableIdx
-	b := len(s.runnable) - 1
-	s.runnable[a] = s.runnable[b]
-	s.runnable[a].runnableIdx = a
-	s.runnable = s.runnable[:b]
-	p.runnableIdx = -1
-	// s.check()
+	intrusiveRemove(&s.runnable, (*Process).runnableIdxPtr, p)
+}
+
+func (s *Simulation) addAll(p *Process) {
+	intrusiveAppend(&s.all, (*Process).allIdxPtr, p)
+}
+
+func (s *Simulation) removeAll(p *Process) {
+	intrusiveRemove(&s.all, (*Process).allIdxPtr, p)
 }
 
 func (s *Simulation) run() {
@@ -245,13 +259,22 @@ func (s *Simulation) run() {
 		p.step()
 		s.current = nil
 	}
+
+	for _, p := range s.all {
+		p.coroutine.stop()
+		s.removeAll(p)
+		if p.runnableIdx != -1 {
+			s.removeRunnable(p)
+		}
+		s.processPool.Put(p)
+	}
 }
 
 func (s *Simulation) Spawn(f func(p *Process)) {
 	p := s.processPool.Get()
 	p.simulation = s
-	p.fn = f
 	p.coroutine.run(f, p)
+	s.addAll(p)
 	s.addRunnable(p)
 }
 

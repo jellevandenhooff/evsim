@@ -176,3 +176,38 @@ func TestChannelBlockRead(t *testing.T) {
 		t.Error(read)
 	}
 }
+
+func TestProcessCleanup(t *testing.T) {
+	sim := evsim.NewSimulation()
+
+	aborted := false
+	read := false
+	slept := false
+
+	ch := evsim.NewChannel[int](1)
+
+	sim.Spawn(func(p *evsim.Process) {
+		defer func() {
+			aborted = true
+		}()
+		ch.Read(p)
+		read = true
+	})
+
+	sim.Spawn(func(p *evsim.Process) {
+		p.Sleep(1)
+		slept = true
+	})
+
+	sim.Start()
+
+	if !aborted {
+		t.Error("expected abort")
+	}
+	if read {
+		t.Error("did not expect read")
+	}
+	if !slept {
+		t.Error("expected slept")
+	}
+}
