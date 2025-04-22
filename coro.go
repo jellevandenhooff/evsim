@@ -36,7 +36,10 @@ func (c *coroutine[T]) entrypoint(yield func(bool) bool) {
 					}
 				}
 			}()
-			c.f(c.arg)
+			f, arg := c.f, c.arg
+			var emptyT T
+			c.f, c.arg = nil, emptyT
+			f(arg)
 		}()
 		c.yieldFn(false)
 	}
