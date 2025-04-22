@@ -91,6 +91,8 @@ type Process struct {
 	waitingPrev, waitingNext *Process
 	fn                       func(p *Process)
 	coroutine                *coroutine[*Process]
+
+	pendingItem any
 }
 
 func newProcess() *Process {
@@ -344,4 +346,76 @@ func (r *Semaphore) Release(p *Process) {
 	} else {
 		r.available += 1
 	}
+}
+
+type Channel[T any] struct {
+	simulation Simulation
+
+	items []T
+	start int
+	used  int
+
+	readers, writers waitingList
+}
+
+func NewChannel[T any](capacity int) *Channel[T] {
+	if capacity <= 0 {
+		panic("bad capacity")
+	}
+	return &Channel[T]{
+		items: make([]T, capacity),
+	}
+}
+
+func (c *Channel[T]) Write(p *Process, item T) {
+	if c.used < len(c.items) {
+		if !c.readers.empty() {
+			reader := c.readers.removeFirst()
+			reader.pendingItem = item
+			p.simulation.addRunnable(reader)
+			return
+		}
+		pos := c.start + c.used
+		if pos >= len(c.items) {
+			pos -= len(c.items)
+		}
+		c.items[pos] = item
+		c.used++
+		return
+	}
+	p.pendingItem = item
+	p.simulation.removeRunnable(p)
+	c.writers.addLast(p)
+	p.yield()
+}
+
+func (c *Channel[T]) Read(p *Process) T {
+	if c.used > 0 {
+		item := c.items[c.start]
+		if !c.writers.empty() {
+			writer := c.writers.removeFirst()
+			c.items[c.start] = writer.pendingItem.(T)
+			writer.pendingItem = nil
+			p.simulation.addRunnable(writer)
+			c.start++
+			if c.start >= len(c.items) {
+				c.start -= len(c.items)
+			}
+		} else {
+			var empty T
+			c.items[c.start] = empty
+			c.start++
+			if c.start >= len(c.items) {
+				c.start -= len(c.items)
+			}
+			c.used--
+		}
+		return item
+	}
+	p.simulation.removeRunnable(p)
+	c.readers.addLast(p)
+	p.yield()
+	item := p.pendingItem.(T)
+	p.pendingItem = nil
+	return item
 }

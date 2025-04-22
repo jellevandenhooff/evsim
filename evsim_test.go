@@ -99,3 +99,58 @@ func BenchmarkEvsim(b *testing.B) {
 		sim.Start()
 	})
 }
+
+func TestChannelNoBlock(t *testing.T) {
+	sim := evsim.NewSimulation()
+
+	ch := evsim.NewChannel[int](1)
+
+	sim.Spawn(func(p *evsim.Process) {
+		ch.Write(p, 1)
+	})
+
+	sim.Spawn(func(p *evsim.Process) {
+		p.Sleep(1)
+		log.Println(ch.Read(p))
+	})
+
+	sim.Start()
+}
+
+func TestChannelBlockWrite(t *testing.T) {
+	sim := evsim.NewSimulation()
+
+	ch := evsim.NewChannel[int](1)
+
+	sim.Spawn(func(p *evsim.Process) {
+		ch.Write(p, 1)
+		ch.Write(p, 2)
+	})
+
+	sim.Spawn(func(p *evsim.Process) {
+		p.Sleep(1)
+		log.Println(ch.Read(p))
+		log.Println(ch.Read(p))
+	})
+
+	sim.Start()
+}
+
+func TestChannelBlockRead(t *testing.T) {
+	sim := evsim.NewSimulation()
+
+	ch := evsim.NewChannel[int](1)
+
+	sim.Spawn(func(p *evsim.Process) {
+		p.Sleep(1)
+		ch.Write(p, 1)
+		ch.Write(p, 2)
+	})
+
+	sim.Spawn(func(p *evsim.Process) {
+		log.Println(ch.Read(p))
+		log.Println(ch.Read(p))
+	})
+
+	sim.Start()
+}
