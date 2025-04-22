@@ -5,7 +5,6 @@ import (
 	"runtime"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/jellevandenhooff/evsim"
 )
@@ -20,14 +19,14 @@ func TestBasic(t *testing.T) {
 			log.Println("starting ticker")
 			for {
 				log.Println("tick", p.Simulation().Now())
-				p.Sleep(10 * time.Second)
+				p.Sleep(10)
 			}
 		})
 	}
 
 	s.Spawn(func(p *evsim.Process) {
 		log.Println("starting background")
-		p.Sleep(1 * time.Minute)
+		p.Sleep(60)
 		log.Println("stopping simulation")
 		p.Simulation().Stop()
 	})
@@ -45,13 +44,13 @@ func TestSemaphore(t *testing.T) {
 
 	for i := 0; i < 20; i++ {
 		s.Spawn(func(p *evsim.Process) {
-			log.Println("started at", p.Simulation().Now().Format(time.TimeOnly))
+			log.Println("started at", p.Simulation().Now())
 			log.Println("starting worker")
 			sema.Acquire(p)
 			log.Println("acquired; working")
-			p.Sleep(10 * time.Second)
+			p.Sleep(10)
 			sema.Release(p)
-			log.Println("finished at", p.Simulation().Now().Format(time.TimeOnly))
+			log.Println("finished at", p.Simulation().Now())
 			log.Println("done worker")
 		})
 	}
@@ -91,7 +90,7 @@ func BenchmarkEvsim(b *testing.B) {
 			sim.Spawn(func(p *evsim.Process) {
 				for k := 0; k < 10; k++ {
 					sem.Acquire(p)
-					p.Sleep(1 * time.Microsecond)
+					p.Sleep(.01)
 					sem.Release(p)
 				}
 			})

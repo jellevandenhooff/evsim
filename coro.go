@@ -15,7 +15,7 @@ type coroutine[T any] struct {
 	stopFn  func()
 }
 
-func newCoro[T any]() *coroutine[T] {
+func newCoroutine[T any]() *coroutine[T] {
 	c := &coroutine[T]{}
 	next, stop := iter.Pull(c.entrypoint)
 	c.nextFn = next

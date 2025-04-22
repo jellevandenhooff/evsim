@@ -4,13 +4,12 @@ import (
 	"container/heap"
 	"log"
 	"math/rand"
-	"time"
 )
 
 var stopValue = new(int)
 
 type timer struct {
-	at          time.Time
+	at          float64
 	thenUnpause *Process
 }
 
@@ -21,7 +20,7 @@ func (t timers) Len() int {
 }
 
 func (t timers) Less(i, j int) bool {
-	return t[i].at.Before(t[j].at)
+	return t[i].at < t[j].at
 }
 
 func (t timers) Swap(i, j int) {
@@ -53,7 +52,7 @@ func (t *timers) pop() timer {
 type Simulation struct {
 	stopped bool
 
-	now time.Time
+	now float64
 
 	current *Process
 
@@ -70,7 +69,7 @@ var SimulationsPool = SyncPool[*Simulation]{
 
 func (s *Simulation) reset() {
 	s.stopped = false
-	s.now = time.Date(2020, 1, 1, 10, 15, 10, 0, time.UTC)
+	s.now = 0.0
 	s.current = nil
 	s.timers = s.timers[:0]
 	s.runnable = s.runnable[:0]
@@ -78,7 +77,7 @@ func (s *Simulation) reset() {
 
 func NewSimulation() *Simulation {
 	return &Simulation{
-		now: time.Date(2020, 1, 1, 10, 15, 10, 0, time.UTC),
+		now: 0.0,
 		processPool: Pool[*Process]{
 			new:   newProcess,
 			reset: (*Process).reset,
@@ -87,20 +86,16 @@ func NewSimulation() *Simulation {
 }
 
 type Process struct {
-	simulation *Simulation
-
-	runnableIdx int
-
+	simulation               *Simulation
+	runnableIdx              int
 	waitingPrev, waitingNext *Process
-
-	fn func(p *Process)
-
-	coroutine *coroutine[*Process]
+	fn                       func(p *Process)
+	coroutine                *coroutine[*Process]
 }
 
 func newProcess() *Process {
 	p := &Process{
-		coroutine: newCoro[*Process](),
+		coroutine: newCoroutine[*Process](),
 	}
 	p.reset()
 	return p
@@ -133,18 +128,48 @@ func (p *Process) Simulation() *Simulation {
 	return p.simulation
 }
 
-func (p *Process) Sleep(duration time.Duration) {
+func (p *Process) Sleep(duration float64) {
 	if duration <= 0 {
 		return
 	}
 	s := p.simulation
-	s.addTimer(s.now.Add(duration), p)
+	s.addTimer(s.now+duration, p)
 	s.removeRunnable(p)
 	p.yield()
 }
 
-func (s *Simulation) addTimer(at time.Time, thenUnpause *Process) {
-	if !at.After(s.now) {
+type waitingList struct {
+	first, last *Process
+}
+
+func (w *waitingList) addLast(p *Process) {
+	p.waitingPrev = w.last
+	if w.last != nil {
+		w.last.waitingNext = p
+	} else {
+		w.first = p
+	}
+	w.last = p
+}
+
+func (w *waitingList) empty() bool {
+	return w.first == nil
+}
+
+func (w *waitingList) removeFirst() *Process {
+	p := w.first
+	w.first = p.waitingNext
+	p.waitingNext = nil
+	if w.first != nil {
+		w.first.waitingPrev = nil
+	} else {
+		w.last = nil
+	}
+	return p
+}
+
+func (s *Simulation) addTimer(at float64, thenUnpause *Process) {
+	if at <= s.now {
 		panic("bad time")
 	}
 
@@ -165,7 +190,7 @@ func (s *Simulation) addRunnable(p *Process) {
 }
 
 func (s *Simulation) check() {
-	for i := 0; i < len(s.runnable); i++ {
+	for i := range len(s.runnable) {
 		if s.runnable[i].runnableIdx != i {
 			log.Fatalf("%d bad: %d", i, s.runnable[i].runnableIdx)
 		}
@@ -194,15 +219,15 @@ func (s *Simulation) run() {
 		if len(s.runnable) == 0 {
 			if len(s.timers) > 0 {
 				next := s.timers.pop()
-				if !next.at.After(s.now) {
+				if next.at < s.now {
 					panic("huh")
 				}
-				if next.at.After(s.now) {
+				if next.at > s.now {
 					// log.Printf("advancing time to %s", s.now.Format(time.TimeOnly))
 					s.now = next.at
 				}
 				s.addRunnable(next.thenUnpause)
-				for len(s.timers) > 0 && s.timers[0].at.Equal(s.now) {
+				for len(s.timers) > 0 && s.timers[0].at == s.now {
 					s.addRunnable(s.timers[0].thenUnpause)
 					s.timers.pop()
 				}
@@ -236,8 +261,47 @@ func (s *Simulation) Stop() {
 	s.stopped = true
 }
 
-func (s *Simulation) Now() time.Time {
+func (s *Simulation) Now() float64 {
 	return s.now
+}
+
+type Event struct {
+	triggered bool
+	waiting   waitingList
+}
+
+func (s *Simulation) NewEvent() *Event {
+	return &Event{
+		triggered: false,
+	}
+}
+
+func (e *Event) Trigger() {
+	if e.triggered {
+		return
+	}
+	e.triggered = true
+
+	for p := e.waiting.first; p != nil; p = p.waitingNext {
+		p.simulation.addRunnable(p)
+		p.waitingPrev = nil
+		p.waitingNext = nil
+	}
+	e.waiting = waitingList{}
+}
+
+func (e *Event) Wait(p *Process) {
+	if e.triggered {
+		return
+	}
+
+	p.simulation.removeRunnable(p)
+	e.waiting.addLast(p)
+	p.yield()
+}
+
+func (e *Event) Triggered() bool {
+	return e.triggered
 }
 
 type Semaphore struct {
@@ -245,14 +309,21 @@ type Semaphore struct {
 
 	available int
 
-	waitingFirst, waitingLast *Process
+	limit int
+
+	waiting waitingList
 }
 
 func NewSemaphore(s *Simulation, limit int) *Semaphore {
 	return &Semaphore{
 		simulation: s,
 		available:  limit,
+		limit:      limit,
 	}
+}
+
+func (r *Semaphore) Limit() int {
+	return r.limit
 }
 
 func (r *Semaphore) Acquire(p *Process) {
@@ -262,26 +333,13 @@ func (r *Semaphore) Acquire(p *Process) {
 	}
 
 	r.simulation.removeRunnable(p)
-	p.waitingPrev = r.waitingLast
-	if r.waitingLast != nil {
-		r.waitingLast.waitingNext = p
-	} else {
-		r.waitingFirst = p
-	}
-	r.waitingLast = p
+	r.waiting.addLast(p)
 	p.yield()
 }
 
 func (r *Semaphore) Release(p *Process) {
-	if r.waitingFirst != nil {
-		p := r.waitingFirst
-		r.waitingFirst = p.waitingNext
-		p.waitingNext = nil
-		if r.waitingFirst != nil {
-			r.waitingFirst.waitingPrev = nil
-		} else {
-			r.waitingLast = nil
-		}
+	if !r.waiting.empty() {
+		p := r.waiting.removeFirst()
 		r.simulation.addRunnable(p)
 	} else {
 		r.available += 1
