@@ -106,6 +106,8 @@ func intrusiveRemove[T any](list *[]T, idx func(elem T) *int, elem T) {
 		(*list)[a] = other
 		*idx(other) = a
 	}
+	var empty T
+	(*list)[b] = empty
 	*list = (*list)[:b]
 	*idx(elem) = -1
 }
