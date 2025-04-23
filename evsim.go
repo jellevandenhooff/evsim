@@ -260,7 +260,8 @@ func (s *Simulation) run() {
 		s.current = nil
 	}
 
-	for _, p := range s.all {
+	for len(s.all) > 0 {
+		p := s.all[0]
 		p.coroutine.stop()
 		s.removeAll(p)
 		if p.runnableIdx != -1 {

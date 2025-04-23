@@ -15,7 +15,7 @@ func TestBasic(t *testing.T) {
 
 	log.Println("spawning")
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		s.Spawn(func(p *evsim.Process) {
 			log.Println("starting ticker")
 			for {
@@ -43,7 +43,7 @@ func TestSemaphore(t *testing.T) {
 
 	sema := evsim.NewSemaphore(s, 5)
 
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		s.Spawn(func(p *evsim.Process) {
 			log.Println("started at", p.Simulation().Now())
 			log.Println("starting worker")
@@ -65,11 +65,11 @@ func runParallel(n int, f func()) {
 	m := runtime.NumCPU()
 	wg.Add(m)
 	ch := make(chan struct{}, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		ch <- struct{}{}
 	}
 	close(ch)
-	for i := 0; i < m; i++ {
+	for range m {
 		go func() {
 			defer wg.Done()
 			for range ch {
@@ -87,9 +87,9 @@ func BenchmarkEvsim(b *testing.B) {
 
 		sem := evsim.NewSemaphore(sim, 10)
 
-		for j := 0; j < 1000; j++ {
+		for range 1000 {
 			sim.Spawn(func(p *evsim.Process) {
-				for k := 0; k < 10; k++ {
+				for range 10 {
 					sem.Acquire(p)
 					p.Sleep(.01)
 					sem.Release(p)
@@ -180,19 +180,21 @@ func TestChannelBlockRead(t *testing.T) {
 func TestProcessCleanup(t *testing.T) {
 	sim := evsim.NewSimulation()
 
-	aborted := false
-	read := false
+	aborted := 0
+	read := 0
 	slept := false
 
 	ch := evsim.NewChannel[int](1)
 
-	sim.Spawn(func(p *evsim.Process) {
-		defer func() {
-			aborted = true
-		}()
-		ch.Read(p)
-		read = true
-	})
+	for range 5 {
+		sim.Spawn(func(p *evsim.Process) {
+			defer func() {
+				aborted++
+			}()
+			ch.Read(p)
+			read++
+		})
+	}
 
 	sim.Spawn(func(p *evsim.Process) {
 		p.Sleep(1)
@@ -201,10 +203,10 @@ func TestProcessCleanup(t *testing.T) {
 
 	sim.Start()
 
-	if !aborted {
+	if aborted != 5 {
 		t.Error("expected abort")
 	}
-	if read {
+	if read != 0 {
 		t.Error("did not expect read")
 	}
 	if !slept {
